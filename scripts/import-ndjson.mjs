@@ -82,7 +82,7 @@ if (!file || !siteUrl) {
         return;
       }
       lastError = result.error ?? `Falha HTTP ${response.status}`;
-      const retryable = response.status === 429 || response.status >= 500 || /overloaded|queued for too long|temporar/i.test(lastError);
+      const retryable = response.status === 429 || response.status >= 500 || /overloaded|queued for too long|CPU time limit|reset|exceeded|temporar/i.test(lastError);
       if (!retryable || attempt === 10) break;
       const delay = Math.min(20_000, 750 * 2 ** attempt) + Math.floor(Math.random() * 500);
       process.stderr.write(`\nLote adiado (${lastError}); tentativa ${attempt + 1}/10 em ${Math.round(delay / 1000)}s.\n`);
