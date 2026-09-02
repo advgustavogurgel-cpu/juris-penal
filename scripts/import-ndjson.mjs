@@ -2,17 +2,15 @@ import { createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 
 const [file, siteUrl] = process.argv.slice(2);
-const token = process.env.JURIS_INGEST_TOKEN;
-const sitesToken = process.env.OAI_SITES_AUTHORIZATION;
 const runId = process.env.JURIS_RUN_ID;
 const sourceName = process.env.JURIS_SOURCE_NAME ?? "Importação NDJSON";
 const intervalStart = process.env.JURIS_INTERVAL_START ?? "2020-01-01";
 const intervalEnd = process.env.JURIS_INTERVAL_END ?? new Date().toISOString().slice(0, 10);
 const expectedCount = Number(process.env.JURIS_EXPECTED_COUNT ?? "") || null;
 
-if (!file || !siteUrl || !token) {
+if (!file || !siteUrl) {
   process.stderr.write(
-    "Uso: JURIS_INGEST_TOKEN=... node scripts/import-ndjson.mjs arquivo.ndjson https://site\n"
+    "Uso: node scripts/import-ndjson.mjs arquivo.ndjson https://site\n"
   );
   process.exitCode = 1;
 } else {
@@ -25,8 +23,38 @@ if (!file || !siteUrl || !token) {
   const pending = new Set();
   const concurrency = Math.max(1, Number(process.env.JURIS_CONCURRENCY ?? "6") || 6);
   const batchSize = Math.min(100, Math.max(1, Number(process.env.JURIS_BATCH_SIZE ?? "100") || 100));
+  let oidc = { token: "", expiresAt: 0 };
+
+  function tokenExpiry(token) {
+    try {
+      const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8"));
+      return Number(payload.exp ?? 0) * 1000;
+    } catch {
+      return 0;
+    }
+  }
+
+  async function authorizationToken() {
+    const legacyToken = process.env.JURIS_INGEST_TOKEN;
+    if (legacyToken) return legacyToken;
+    if (oidc.token && oidc.expiresAt > Date.now() + 30_000) return oidc.token;
+    const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
+    const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
+    if (!requestUrl || !requestToken) {
+      throw new Error("Identidade OIDC do GitHub Actions indisponível");
+    }
+    const separator = requestUrl.includes("?") ? "&" : "?";
+    const response = await fetch(`${requestUrl}${separator}audience=juris-penal`, {
+      headers: { authorization: `Bearer ${requestToken}` },
+    });
+    if (!response.ok) throw new Error(`Falha ao obter identidade OIDC: HTTP ${response.status}`);
+    const body = await response.json();
+    oidc = { token: body.value, expiresAt: tokenExpiry(body.value) };
+    return oidc.token;
+  }
 
   async function send(items, final = false) {
+    const token = await authorizationToken();
     const run = runId ? {
       id: runId,
       tribunal: "STJ",
@@ -41,7 +69,6 @@ if (!file || !siteUrl || !token) {
       method: "POST",
       headers: {
         authorization: `Bearer ${token}`,
-        ...(sitesToken ? { "OAI-Sites-Authorization": `Bearer ${sitesToken}` } : {}),
         "content-type": "application/json",
       },
       body: JSON.stringify({ decisions: items, run }),
