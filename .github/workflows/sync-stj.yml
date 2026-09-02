@@ -1,0 +1,55 @@
+name: Sincronizar acervo STJ
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 6 2 * *"
+  push:
+    paths:
+      - ".github/stj-sync-trigger"
+
+concurrency:
+  group: juris-penal-stj
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Coletar e normalizar dados oficiais
+        run: |
+          node scripts/collect-stj-espelhos.mjs \
+            --download \
+            --cache=.cache/stj \
+            --output=stj-penal-desde-2020.ndjson \
+            --since=2020-01-01
+          echo "JURIS_EXPECTED_COUNT=$(wc -l < stj-penal-desde-2020.ndjson)" >> "$GITHUB_ENV"
+          echo "JURIS_INTERVAL_END=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Importar e reconciliar
+        env:
+          JURIS_INGEST_TOKEN: ${{ secrets.JURIS_INGEST_TOKEN }}
+          OAI_SITES_AUTHORIZATION: ${{ secrets.OAI_SITES_AUTHORIZATION }}
+          JURIS_RUN_ID: stj-${{ github.run_id }}-${{ github.run_attempt }}
+          JURIS_SOURCE_NAME: STJ Dados Abertos - Quinta Turma, Sexta Turma e Terceira Seção
+          JURIS_INTERVAL_START: "2020-01-01"
+          JURIS_CONCURRENCY: "20"
+          JURIS_BATCH_SIZE: "100"
+        run: |
+          test -n "$JURIS_INGEST_TOKEN"
+          test -n "$OAI_SITES_AUTHORIZATION"
+          node scripts/import-ndjson.mjs \
+            stj-penal-desde-2020.ndjson \
+            https://juris-penal-gg.adv-gustavogurgel.chatgpt.site
