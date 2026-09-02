@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 240
     permissions:
       contents: read
+      id-token: write
 
     steps:
       - name: Baixar o código
@@ -40,16 +41,12 @@ jobs:
 
       - name: Importar e reconciliar
         env:
-          JURIS_INGEST_TOKEN: ${{ secrets.JURIS_INGEST_TOKEN }}
-          OAI_SITES_AUTHORIZATION: ${{ secrets.OAI_SITES_AUTHORIZATION }}
           JURIS_RUN_ID: stj-${{ github.run_id }}-${{ github.run_attempt }}
           JURIS_SOURCE_NAME: STJ Dados Abertos - Quinta Turma, Sexta Turma e Terceira Seção
           JURIS_INTERVAL_START: "2020-01-01"
-          JURIS_CONCURRENCY: "20"
+          JURIS_CONCURRENCY: "6"
           JURIS_BATCH_SIZE: "100"
         run: |
-          test -n "$JURIS_INGEST_TOKEN"
-          test -n "$OAI_SITES_AUTHORIZATION"
           node scripts/import-ndjson.mjs \
             stj-penal-desde-2020.ndjson \
             https://juris-penal-gg.adv-gustavogurgel.chatgpt.site
