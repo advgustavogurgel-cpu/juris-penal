@@ -29,6 +29,14 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Restaurar arquivos oficiais já baixados
+        uses: actions/cache@v4
+        with:
+          path: .cache/stj
+          key: ${{ runner.os }}-stj-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-stj-
+
       - name: Coletar e normalizar dados oficiais
         run: |
           node scripts/collect-stj-espelhos.mjs \
