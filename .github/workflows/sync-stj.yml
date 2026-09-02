@@ -44,7 +44,7 @@ jobs:
           JURIS_RUN_ID: stj-${{ github.run_id }}-${{ github.run_attempt }}
           JURIS_SOURCE_NAME: STJ Dados Abertos - Quinta Turma, Sexta Turma e Terceira Seção
           JURIS_INTERVAL_START: "2020-01-01"
-          JURIS_CONCURRENCY: "6"
+          JURIS_CONCURRENCY: "2"
           JURIS_BATCH_SIZE: "100"
         run: |
           node scripts/import-ndjson.mjs \
