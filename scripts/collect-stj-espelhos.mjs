@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { basename, join } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { createHash } from "node:crypto";
@@ -56,9 +56,29 @@ async function getJson(url) {
 
 async function downloadFile(url, destination) {
   if (existsSync(destination)) return;
-  const response = await fetch(url, { headers: { "user-agent": "JurisPenal/1.0" } });
-  if (!response.ok || !response.body) throw new Error(`Falha ${response.status}: ${url}`);
-  await pipeline(response.body, createWriteStream(destination));
+  const partial = `${destination}.part`;
+  let lastStatus = 0;
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    rmSync(partial, { force: true });
+    try {
+      const response = await fetch(url, {
+        headers: { "user-agent": "JurisPenal/1.0", accept: "application/json, application/zip" },
+      });
+      lastStatus = response.status;
+      if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+      await pipeline(response.body, createWriteStream(partial));
+      renameSync(partial, destination);
+      return;
+    } catch (error) {
+      rmSync(partial, { force: true });
+      if (attempt === 8) {
+        throw new Error(`Falha ${lastStatus || "de rede"}: ${url}`, { cause: error });
+      }
+      const delay = Math.min(30_000, 2 ** attempt * 1_500);
+      process.stderr.write(`Tentativa ${attempt}/8 falhou para ${basename(destination)}; nova tentativa em ${delay / 1000}s.\n`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
 }
 
 function recordsFromFile(path, member) {
