@@ -54,7 +54,6 @@ if (!file || !siteUrl) {
   }
 
   async function send(items, final = false) {
-    const token = await authorizationToken();
     const run = runId ? {
       id: runId,
       tribunal: "STJ",
@@ -65,20 +64,31 @@ if (!file || !siteUrl) {
       status: final ? "reconciled" : "running",
       notes: final ? "Carga oficial concluída e deduplicada por ID do STJ." : "Carga oficial em andamento.",
     } : undefined;
-    const response = await fetch(`${siteUrl.replace(/\/$/, "")}/api/ingest`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({ decisions: items, run }),
-    });
-    const result = await response.json();
-    if (!response.ok) {
-      throw new Error(result.error ?? `Falha HTTP ${response.status}`);
+    let lastError = "Falha de importação";
+    for (let attempt = 1; attempt <= 10; attempt += 1) {
+      const token = await authorizationToken();
+      const response = await fetch(`${siteUrl.replace(/\/$/, "")}/api/ingest`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ decisions: items, run }),
+      });
+      const result = await response.json();
+      if (response.ok) {
+        imported += result.accepted;
+        process.stdout.write(`\r${imported} registros importados`);
+        return;
+      }
+      lastError = result.error ?? `Falha HTTP ${response.status}`;
+      const retryable = response.status === 429 || response.status >= 500 || /overloaded|queued for too long|temporar/i.test(lastError);
+      if (!retryable || attempt === 10) break;
+      const delay = Math.min(20_000, 750 * 2 ** attempt) + Math.floor(Math.random() * 500);
+      process.stderr.write(`\nLote adiado (${lastError}); tentativa ${attempt + 1}/10 em ${Math.round(delay / 1000)}s.\n`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
-    imported += result.accepted;
-    process.stdout.write(`\r${imported} registros importados`);
+    throw new Error(lastError);
   }
 
   async function schedule(items) {
