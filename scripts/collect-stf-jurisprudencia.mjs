@@ -241,13 +241,6 @@ async function collectStableSlice(base, start, end, firstResponse = null) {
   const first = firstResponse ?? await post(buildQuery(base, start, end, 0));
   const total = first.result?.hits?.total?.value ?? 0;
 
-  if (total > PAGE_SIZE && start !== end) {
-    const [leftEnd, rightStart] = splitDateRange(start, end);
-    await collectStableSlice(base, start, leftEnd);
-    await collectStableSlice(base, rightStart, end);
-    return;
-  }
-
   const hits = first.result?.hits?.hits ?? [];
   const firstExpected = Math.min(total, PAGE_SIZE);
   if (hits.length !== firstExpected) {
