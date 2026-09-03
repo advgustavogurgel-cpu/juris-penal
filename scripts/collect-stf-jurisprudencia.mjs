@@ -184,18 +184,16 @@ async function post(body) {
       if (!sessionStartedAt || Date.now() - sessionStartedAt > 180_000) {
         await renewSession();
       }
-      const result = await page.evaluate(async ({ body }) => {
-        const response = await fetch("/api/search/search", {
-          method: "POST",
-          headers: { "content-type": "application/json", accept: "application/json" },
-          body: JSON.stringify(body),
-        });
-        return {
-          ok: response.ok,
-          status: response.status,
-          text: await response.text(),
-        };
-      }, { body });
+      const response = await context.request.post(`${BASE_URL}/api/search/search`, {
+        headers: { "content-type": "application/json", accept: "application/json" },
+        data: body,
+        timeout: 120_000,
+      });
+      const result = {
+        ok: response.ok(),
+        status: response.status(),
+        text: await response.text(),
+      };
 
       if (result.status === 403) {
         await renewSession();
