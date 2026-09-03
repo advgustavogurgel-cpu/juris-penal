@@ -153,7 +153,8 @@ const context = await browser.newContext({
   locale: "pt-BR",
   ignoreHTTPSErrors: true,
 });
-const page = await context.newPage();
+const sessionPage = await context.newPage();
+const apiPage = await context.newPage();
 const output = createWriteStream(outputFile, { encoding: "utf8" });
 const ids = new Set();
 let expected = 0;
@@ -163,7 +164,7 @@ let sessionStartedAt = 0;
 
 async function renewSession() {
   await context.clearCookies();
-  await page.goto(`${BASE_URL}/pages/search`, {
+  await sessionPage.goto(`${BASE_URL}/pages/search`, {
     waitUntil: "domcontentloaded",
     timeout: 120_000,
   });
@@ -173,7 +174,7 @@ async function renewSession() {
       sessionStartedAt = Date.now();
       return;
     }
-    await page.waitForTimeout(1_000);
+    await sessionPage.waitForTimeout(1_000);
   }
   throw new Error("O STF não liberou a sessão após o desafio de JavaScript.");
 }
@@ -185,16 +186,18 @@ async function post(body) {
       if (!sessionStartedAt || Date.now() - sessionStartedAt > 180_000) {
         await renewSession();
       }
-      const response = await context.request.post(`${BASE_URL}/api/search/search`, {
-        headers: { "content-type": "application/json", accept: "application/json" },
-        data: body,
-        timeout: 120_000,
-      });
-      const result = {
-        ok: response.ok(),
-        status: response.status(),
-        text: await response.text(),
-      };
+      const result = await apiPage.evaluate(async ({ body, baseUrl }) => {
+        const response = await fetch(`${baseUrl}/api/search/search`, {
+          method: "POST",
+          headers: { "content-type": "application/json", accept: "application/json" },
+          body: JSON.stringify(body),
+        });
+        return {
+          ok: response.ok,
+          status: response.status,
+          text: await response.text(),
+        };
+      }, { body, baseUrl: BASE_URL });
 
       if (result.status === 403) {
         await renewSession();
@@ -213,7 +216,7 @@ async function post(body) {
     } catch (error) {
       lastError = error;
       if (attempt === 8) break;
-      await page.waitForTimeout(Math.min(attempt * 1_500, 7_500));
+      await sessionPage.waitForTimeout(Math.min(attempt * 1_500, 7_500));
     }
   }
   throw lastError;
@@ -255,6 +258,10 @@ async function collectStableSlice(base, start, end, firstResponse = null) {
 
 try {
   await renewSession();
+  await apiPage.goto(`${BASE_URL}/pages/search`, {
+    waitUntil: "domcontentloaded",
+    timeout: 120_000,
+  });
 
   let month = `${since.slice(0, 7)}-01`;
   while (month <= until) {
