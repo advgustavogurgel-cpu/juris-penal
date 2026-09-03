@@ -151,24 +151,58 @@ const ids = new Set();
 let expected = 0;
 let emitted = 0;
 
+let sessionStartedAt = 0;
+
+async function renewSession() {
+  await context.clearCookies();
+  await page.goto(`${BASE_URL}/pages/search`, {
+    waitUntil: "domcontentloaded",
+    timeout: 120_000,
+  });
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const cookies = await context.cookies();
+    if (cookies.some((cookie) => cookie.name === "aws-waf-token")) {
+      sessionStartedAt = Date.now();
+      return;
+    }
+    await page.waitForTimeout(1_000);
+  }
+  throw new Error("O STF não liberou a sessão após o desafio de JavaScript.");
+}
+
 async function post(body) {
   let lastError;
-  for (let attempt = 1; attempt <= 6; attempt += 1) {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
     try {
-      return await page.evaluate(async ({ body }) => {
+      if (!sessionStartedAt || Date.now() - sessionStartedAt > 180_000) {
+        await renewSession();
+      }
+      const result = await page.evaluate(async ({ body }) => {
         const response = await fetch("/api/search/search", {
           method: "POST",
           headers: { "content-type": "application/json", accept: "application/json" },
           body: JSON.stringify(body),
         });
-        const text = await response.text();
-        if (!response.ok) throw new Error(`HTTP ${response.status}: ${text.slice(0, 500)}`);
-        return JSON.parse(text);
+        return {
+          ok: response.ok,
+          status: response.status,
+          text: await response.text(),
+        };
       }, { body });
+
+      if (result.status === 403) {
+        await renewSession();
+        lastError = new Error("Sessão do STF expirada durante a coleta.");
+        continue;
+      }
+      if (!result.ok) {
+        throw new Error(`HTTP ${result.status}: ${result.text.slice(0, 500)}`);
+      }
+      return JSON.parse(result.text);
     } catch (error) {
       lastError = error;
-      if (attempt === 6) break;
-      await page.waitForTimeout(attempt * 1_500);
+      if (attempt === 8) break;
+      await page.waitForTimeout(Math.min(attempt * 1_500, 7_500));
     }
   }
   throw lastError;
@@ -199,14 +233,7 @@ async function collectSlice(base, start, end, firstResponse = null) {
 }
 
 try {
-  await page.goto(`${BASE_URL}/pages/search`, { waitUntil: "domcontentloaded", timeout: 120_000 });
-  let ready = false;
-  for (let attempt = 0; attempt < 60; attempt += 1) {
-    const cookies = await context.cookies();
-    if (cookies.some((cookie) => cookie.name === "aws-waf-token")) { ready = true; break; }
-    await page.waitForTimeout(1_000);
-  }
-  if (!ready) throw new Error("O STF não liberou a sessão após o desafio de JavaScript.");
+  await renewSession();
 
   let month = `${since.slice(0, 7)}-01`;
   while (month <= until) {
