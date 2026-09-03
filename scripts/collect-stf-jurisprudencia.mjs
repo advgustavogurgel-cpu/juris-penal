@@ -38,7 +38,7 @@ const args = new Map(process.argv.slice(2).map((value, index, all) => {
 const since = args.get("since") ?? "2020-01-01";
 const until = args.get("until") ?? new Date().toISOString().slice(0, 10);
 const outputFile = args.get("output") ?? "stf-penal-desde-2020.ndjson";
-const PAGE_SIZE = 2_000;
+const PAGE_SIZE = 250;
 
 function clean(value) {
   if (Array.isArray(value)) return value.map(clean).filter(Boolean).join("\n");
@@ -97,7 +97,7 @@ function buildQuery(base, start, end, from = 0) {
     _source: SOURCE_FIELDS,
     size: PAGE_SIZE,
     from,
-    sort: [{ publicacao_data: "asc" }],
+    sort: [{ publicacao_data: "asc" }, { "dg_unique.keyword": "asc" }],
     track_total_hits: true,
   };
 }
@@ -241,10 +241,7 @@ async function collectStableSlice(base, start, end, firstResponse = null) {
   const first = firstResponse ?? await post(buildQuery(base, start, end, 0));
   const total = first.result?.hits?.total?.value ?? 0;
 
-  if (total > PAGE_SIZE) {
-    if (start === end) {
-      throw new Error(`Um único dia excede o lote seguro: ${base} ${start} (${total})`);
-    }
+  if (total > PAGE_SIZE && start !== end) {
     const [leftEnd, rightStart] = splitDateRange(start, end);
     await collectStableSlice(base, start, leftEnd);
     await collectStableSlice(base, rightStart, end);
@@ -252,11 +249,21 @@ async function collectStableSlice(base, start, end, firstResponse = null) {
   }
 
   const hits = first.result?.hits?.hits ?? [];
-  if (hits.length !== total) {
-    throw new Error(`Lote incompleto do STF: ${base} ${start} a ${end}; total=${total}, retornados=${hits.length}`);
+  const firstExpected = Math.min(total, PAGE_SIZE);
+  if (hits.length !== firstExpected) {
+    throw new Error(`Lote incompleto do STF: ${base} ${start} a ${end}; esperados=${firstExpected}, retornados=${hits.length}`);
   }
   expected += total;
   await emitHits(hits, base);
+  for (let from = PAGE_SIZE; from < total; from += PAGE_SIZE) {
+    const response = await post(buildQuery(base, start, end, from));
+    const pageHits = response.result?.hits?.hits ?? [];
+    const pageExpected = Math.min(PAGE_SIZE, total - from);
+    if (pageHits.length !== pageExpected) {
+      throw new Error(`Página incompleta do STF: ${base} ${start}; deslocamento=${from}, esperados=${pageExpected}, retornados=${pageHits.length}`);
+    }
+    await emitHits(pageHits, base);
+  }
   process.stdout.write(`\r${emitted}/${expected} registros coletados até ${end}`);
 }
 
