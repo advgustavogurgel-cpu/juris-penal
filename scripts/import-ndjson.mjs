@@ -3,15 +3,19 @@ import { createInterface } from "node:readline";
 
 const [file, siteUrl] = process.argv.slice(2);
 const runId = process.env.JURIS_RUN_ID;
+const tribunal = process.env.JURIS_TRIBUNAL ?? "STJ";
 const sourceName = process.env.JURIS_SOURCE_NAME ?? "Importação NDJSON";
 const intervalStart = process.env.JURIS_INTERVAL_START ?? "2020-01-01";
 const intervalEnd = process.env.JURIS_INTERVAL_END ?? new Date().toISOString().slice(0, 10);
 const expectedCount = Number(process.env.JURIS_EXPECTED_COUNT ?? "") || null;
+const finalNotes = process.env.JURIS_RUN_NOTES ?? `Carga oficial concluída e deduplicada por ID do ${tribunal}.`;
+
+if (!["STF", "STJ", "TJSP"].includes(tribunal)) {
+  throw new Error(`Tribunal inválido: ${tribunal}`);
+}
 
 if (!file || !siteUrl) {
-  process.stderr.write(
-    "Uso: node scripts/import-ndjson.mjs arquivo.ndjson https://site\n"
-  );
+  process.stderr.write("Uso: node scripts/import-ndjson.mjs arquivo.ndjson https://site\n");
   process.exitCode = 1;
 } else {
   const input = createInterface({
@@ -40,9 +44,7 @@ if (!file || !siteUrl) {
     if (oidc.token && oidc.expiresAt > Date.now() + 30_000) return oidc.token;
     const requestUrl = process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
     const requestToken = process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN;
-    if (!requestUrl || !requestToken) {
-      throw new Error("Identidade OIDC do GitHub Actions indisponível");
-    }
+    if (!requestUrl || !requestToken) throw new Error("Identidade OIDC do GitHub Actions indisponível");
     const separator = requestUrl.includes("?") ? "&" : "?";
     const response = await fetch(`${requestUrl}${separator}audience=juris-penal`, {
       headers: { authorization: `Bearer ${requestToken}` },
@@ -56,23 +58,20 @@ if (!file || !siteUrl) {
   async function send(items, final = false) {
     const run = runId ? {
       id: runId,
-      tribunal: "STJ",
+      tribunal,
       sourceName,
       intervalStart,
       intervalEnd,
       expectedCount,
       status: final ? "reconciled" : "running",
-      notes: final ? "Carga oficial concluída e deduplicada por ID do STJ." : "Carga oficial em andamento.",
+      notes: final ? finalNotes : "Carga oficial em andamento.",
     } : undefined;
     let lastError = "Falha de importação";
     for (let attempt = 1; attempt <= 10; attempt += 1) {
       const token = await authorizationToken();
       const response = await fetch(`${siteUrl.replace(/\/$/, "")}/api/ingest`, {
         method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-type": "application/json",
-        },
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
         body: JSON.stringify({ decisions: items, run }),
       });
       const result = await response.json();
@@ -99,7 +98,11 @@ if (!file || !siteUrl) {
 
   for await (const line of input) {
     if (!line.trim()) continue;
-    batch.push(JSON.parse(line));
+    const item = JSON.parse(line);
+    if (item.tribunal !== tribunal) {
+      throw new Error(`Registro ${item.id ?? "sem ID"} pertence a ${item.tribunal}, esperado ${tribunal}`);
+    }
+    batch.push(item);
     if (batch.length === batchSize) {
       await schedule(batch);
       batch = [];
