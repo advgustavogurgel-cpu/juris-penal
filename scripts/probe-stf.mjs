@@ -1,6 +1,21 @@
 import { chromium } from "playwright";
 
 const BASE_URL = "https://jurisprudencia.stf.jus.br";
+const CRIMINAL_CLASSES = ["AP", "HC", "RHC", "INQ", "EXT", "PPE", "EP", "RC", "RvC"];
+const TEXT_FIELDS = [
+  "ementa_texto", "acordao_ata", "decisao_texto",
+  "documental_indexacao_texto", "documental_legislacao_citada_texto",
+  "documental_observacao_texto", "inteiro_teor_texto",
+];
+const TEXT_TERMS = [
+  "direito penal", "processual penal", "processo penal", "código penal",
+  "código de processo penal", "infração penal", "ação penal", "habeas corpus",
+  "crime", "criminal", "criminoso", "delito", "prisão", "réu", "acusado",
+  "condenado", "denúncia", "dosimetria", "punibilidade", "prescrição",
+  "tráfico", "entorpecente", "roubo", "furto", "homicídio", "estupro",
+  "latrocínio", "lavagem de dinheiro", "organização criminosa", "tribunal do júri",
+];
+
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
@@ -9,47 +24,36 @@ const context = await browser.newContext({
 const page = await context.newPage();
 
 try {
-  await page.goto(`${BASE_URL}/pages/search`, {
-    waitUntil: "domcontentloaded",
-    timeout: 120_000,
-  });
+  await page.goto(`${BASE_URL}/pages/search`, { waitUntil: "domcontentloaded", timeout: 120_000 });
   let ready = false;
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const cookies = await context.cookies();
-    if (cookies.some((cookie) => cookie.name === "aws-waf-token")) {
-      ready = true;
-      break;
-    }
+    if (cookies.some((cookie) => cookie.name === "aws-waf-token")) { ready = true; break; }
     await page.waitForTimeout(1_000);
   }
   if (!ready) throw new Error("O STF não liberou a sessão após o desafio de JavaScript.");
 
-  async function query(base, from, until) {
-    const body = {
-      query: {
+  async function query(base, from, until, penal) {
+    const filters = [{
+      range: { publicacao_data: { format: "ddMMyyyy", gte: from, lte: until } },
+    }];
+    if (penal) {
+      filters.push({
         bool: {
-          filter: [{
-            range: {
-              publicacao_data: { format: "ddMMyyyy", gte: from, lte: until },
-            },
-          }],
-          must: [],
-          should: [],
-          must_not: [],
+          minimum_should_match: 1,
+          should: [
+            { terms: { "processo_classe_processual_unificada_classe_sigla.keyword": CRIMINAL_CLASSES } },
+            ...TEXT_TERMS.map((term) => ({
+              multi_match: { query: term, fields: TEXT_FIELDS, type: "phrase" },
+            })),
+          ],
         },
-      },
+      });
+    }
+    const body = {
+      query: { bool: { filter: filters, must: [], should: [], must_not: [] } },
       post_filter: { bool: { must: [{ term: { base } }], should: [] } },
-      _source: ["base", "ramo_direito", "publicacao_data"],
-      aggs: {
-        ramo_direito_agg: {
-          aggs: {
-            ramo_direito_agg: {
-              terms: { field: "ramo_direito.keyword", size: 200, execution_hint: "map" },
-            },
-          },
-          filter: { bool: { must: [{ term: { base } }] } },
-        },
-      },
+      _source: ["base", "publicacao_data"],
       size: 1,
       from: 0,
       sort: [{ publicacao_data: "asc" }],
@@ -72,16 +76,17 @@ try {
     results[base] = {};
     for (let year = 2020; year <= 2026; year += 1) {
       const until = year === 2026 ? "03092026" : `3112${year}`;
-      const response = await query(base, `0101${year}`, until);
-      const result = response.result ?? {};
-      const buckets = result.aggregations?.ramo_direito_agg?.ramo_direito_agg?.buckets ?? [];
+      const [all, penal] = await Promise.all([
+        query(base, `0101${year}`, until, false),
+        query(base, `0101${year}`, until, true),
+      ]);
       results[base][year] = {
-        total: result.hits?.total?.value ?? 0,
-        ramos: buckets.map((bucket) => ({ ramo: bucket.key, total: bucket.doc_count })),
+        todos: all.result?.hits?.total?.value ?? 0,
+        penal: penal.result?.hits?.total?.value ?? 0,
       };
     }
   }
-  process.stdout.write(`${JSON.stringify(results, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ criterio: { classes: CRIMINAL_CLASSES, termos: TEXT_TERMS }, results }, null, 2)}\n`);
 } finally {
   await browser.close();
 }
