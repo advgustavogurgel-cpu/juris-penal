@@ -38,7 +38,7 @@ const args = new Map(process.argv.slice(2).map((value, index, all) => {
 const since = args.get("since") ?? "2020-01-01";
 const until = args.get("until") ?? new Date().toISOString().slice(0, 10);
 const outputFile = args.get("output") ?? "stf-penal-desde-2020.ndjson";
-const PAGE_SIZE = 250;
+const PAGE_SIZE = 9_999;
 
 function clean(value) {
   if (Array.isArray(value)) return value.map(clean).filter(Boolean).join("\n");
