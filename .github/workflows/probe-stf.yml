@@ -1,0 +1,25 @@
+name: Diagnosticar fonte STF
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/stf-probe-trigger"
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Instalar navegador controlado
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Medir bases e ramos oficiais
+        run: node scripts/probe-stf.mjs
