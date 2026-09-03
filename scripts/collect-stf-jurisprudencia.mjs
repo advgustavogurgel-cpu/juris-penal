@@ -151,6 +151,7 @@ const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
   userAgent: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
   locale: "pt-BR",
+  ignoreHTTPSErrors: true,
 });
 const page = await context.newPage();
 const output = createWriteStream(outputFile, { encoding: "utf8" });
