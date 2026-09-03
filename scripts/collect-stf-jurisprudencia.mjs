@@ -38,7 +38,7 @@ const args = new Map(process.argv.slice(2).map((value, index, all) => {
 const since = args.get("since") ?? "2020-01-01";
 const until = args.get("until") ?? new Date().toISOString().slice(0, 10);
 const outputFile = args.get("output") ?? "stf-penal-desde-2020.ndjson";
-const PAGE_SIZE = 9_999;
+const PAGE_SIZE = 2_000;
 
 function clean(value) {
   if (Array.isArray(value)) return value.map(clean).filter(Boolean).join("\n");
@@ -62,6 +62,13 @@ function addMonths(iso) {
 function addDays(iso) {
   const d = new Date(`${iso}T00:00:00Z`);
   return new Date(d.getTime() + 86_400_000).toISOString().slice(0, 10);
+}
+function splitDateRange(start, end) {
+  const startMs = new Date(`${start}T00:00:00Z`).getTime();
+  const endMs = new Date(`${end}T00:00:00Z`).getTime();
+  const middleMs = startMs + Math.floor((endMs - startMs) / 172_800_000) * 86_400_000;
+  const leftEnd = new Date(middleMs).toISOString().slice(0, 10);
+  return [leftEnd, addDays(leftEnd)];
 }
 
 function buildQuery(base, start, end, from = 0) {
@@ -198,7 +205,12 @@ async function post(body) {
       if (!result.ok) {
         throw new Error(`HTTP ${result.status}: ${result.text.slice(0, 500)}`);
       }
-      return JSON.parse(result.text);
+      try {
+        return JSON.parse(result.text);
+      } catch {
+        await renewSession();
+        throw new Error(`Resposta inválida do STF (status ${result.status}, ${result.text.length} bytes).`);
+      }
     } catch (error) {
       lastError = error;
       if (attempt === 8) break;
@@ -219,16 +231,26 @@ async function emitHits(hits, base) {
   }
 }
 
-async function collectSlice(base, start, end, firstResponse = null) {
+async function collectStableSlice(base, start, end, firstResponse = null) {
   const first = firstResponse ?? await post(buildQuery(base, start, end, 0));
   const total = first.result?.hits?.total?.value ?? 0;
-  if (total >= 10_000) throw new Error(`Intervalo excede limite do STF: ${base} ${start} a ${end} (${total})`);
-  expected += total;
-  await emitHits(first.result?.hits?.hits ?? [], base);
-  for (let from = PAGE_SIZE; from < total; from += PAGE_SIZE) {
-    const response = await post(buildQuery(base, start, end, from));
-    await emitHits(response.result?.hits?.hits ?? [], base);
+
+  if (total > PAGE_SIZE) {
+    if (start === end) {
+      throw new Error(`Um único dia excede o lote seguro: ${base} ${start} (${total})`);
+    }
+    const [leftEnd, rightStart] = splitDateRange(start, end);
+    await collectStableSlice(base, start, leftEnd);
+    await collectStableSlice(base, rightStart, end);
+    return;
   }
+
+  const hits = first.result?.hits?.hits ?? [];
+  if (hits.length !== total) {
+    throw new Error(`Lote incompleto do STF: ${base} ${start} a ${end}; total=${total}, retornados=${hits.length}`);
+  }
+  expected += total;
+  await emitHits(hits, base);
   process.stdout.write(`\r${emitted}/${expected} registros coletados até ${end}`);
 }
 
@@ -240,15 +262,7 @@ try {
     const end = monthEnd(month) < until ? monthEnd(month) : until;
     const start = month < since ? since : month;
     for (const base of ["acordaos", "decisoes"]) {
-      const first = await post(buildQuery(base, start, end, 0));
-      const total = first.result?.hits?.total?.value ?? 0;
-      if (total < 10_000) {
-        await collectSlice(base, start, end, first);
-      } else {
-        for (let day = start; day <= end; day = addDays(day)) {
-          await collectSlice(base, day, day);
-        }
-      }
+      await collectStableSlice(base, start, end);
     }
     month = addMonths(month);
   }
