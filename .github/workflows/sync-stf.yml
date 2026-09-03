@@ -1,0 +1,58 @@
+name: Sincronizar acervo STF
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "47 7 3 * *"
+  push:
+    paths:
+      - ".github/stf-sync-trigger"
+
+concurrency:
+  group: juris-penal-stf
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Instalar navegador controlado
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install --with-deps chromium
+
+      - name: Coletar e reconciliar a fonte oficial
+        run: |
+          node scripts/collect-stf-jurisprudencia.mjs \
+            --output=stf-penal-desde-2020.ndjson \
+            --since=2020-01-01 \
+            --until="$(date -u +%F)"
+          echo "JURIS_EXPECTED_COUNT=$(wc -l < stf-penal-desde-2020.ndjson)" >> "$GITHUB_ENV"
+          echo "JURIS_INTERVAL_END=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Importar e reconciliar
+        env:
+          JURIS_RUN_ID: stf-${{ github.run_id }}-${{ github.run_attempt }}
+          JURIS_TRIBUNAL: STF
+          JURIS_SOURCE_NAME: STF Jurisprudência - acórdãos e decisões monocráticas
+          JURIS_RUN_NOTES: Recorte penal auditável por classes criminais e ocorrências no texto indexado; carga deduplicada por ID do STF.
+          JURIS_INTERVAL_START: "2020-01-01"
+          JURIS_CONCURRENCY: "2"
+          JURIS_BATCH_SIZE: "100"
+        run: |
+          node scripts/import-ndjson.mjs \
+            stf-penal-desde-2020.ndjson \
+            https://juris-penal-gg.adv-gustavogurgel.chatgpt.site
