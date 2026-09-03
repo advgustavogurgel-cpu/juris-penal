@@ -97,7 +97,7 @@ function buildQuery(base, start, end, from = 0) {
     _source: SOURCE_FIELDS,
     size: PAGE_SIZE,
     from,
-    sort: [{ publicacao_data: "asc" }, { "dg_unique.keyword": "asc" }],
+    sort: [{ publicacao_data: "asc" }, { id: "asc" }],
     track_total_hits: true,
   };
 }
